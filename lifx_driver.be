@@ -82,14 +82,33 @@ class LifxDriver
       self.lifx_discovery()
       return webserver.content_response(json.dump(self.discovery))
     end
+    def test_lights(action)
+      if webserver.arg("src") != self.source return end
+      for id: string.split(webserver.arg("ids"), ",")
+        if self.discovery.contains(id)
+          var ip = self.discovery[id][0]
+          action(ip, id)
+        end
+      end
+      webserver.content_response('{}')
+    end
+    if webserver.has_arg("tl") # test for light toggles
+      return test_lights(/ ip,id -> self.lifx_toggle_power(ip, id, false))
+    end
+    if webserver.has_arg("fb") # test for full brightness
+      return test_lights(def (ip,id)
+        self.lifx_set_brightness(ip, id, 0xffff)
+        self.lifx_toggle_power(ip, id, true)
+      end)
+    end
     # restart discovery on config page load. this allows users to refresh the page to catch flaky wifi nodes.
     self.lifx_discovery()
     # emit HTML
     webserver.content_start("LIFX Configuration Page")
     webserver.content_send_style()
-    webserver.content_send('<fieldset><legend><b> LIFX Configuration </b></legend><p style="width:320px;"><div>See the <a href="https://github.com/itsnotlupus/tasmota-switch-lifx/wiki" target="_blank">documentation</a>.</div><p><b>Choose the lights to control</b></p><form id="f" method="post"><table style="width:100%"><tbody id=t></tbody></table><p></p><hr><p><b>Trigger to toggle the lights</b><br>'+self.make_select(1,persist.lifx_trigger_toggle)+'</p><p><b>Trigger for full brightness</b><br>'+self.make_select(2,persist.lifx_trigger_brightness)+'</p><input type="hidden" name="group"><p></p><button class="button bgrn" name="setgrp" value="'+self.source+'">Save</button></form></fieldset>'
+    webserver.content_send('<fieldset><legend><b> LIFX Configuration </b></legend><p style="width:320px;"><div>See the <a href="https://github.com/itsnotlupus/tasmota-switch-lifx/wiki" target="_blank">documentation</a>.</div><p><b>Choose the lights to control</b></p><form id="f" method="post"><table style="width:100%"><tbody id=t></tbody></table><p></p><hr><p><b>Test your selection</b><div style="display:flex;gap:1em"><button id="tl" type="button">Lights Off</button><button id="fb" type="button">Full Brigthness</button></div><p></p><hr><p><b>Trigger to toggle the lights</b><br>'+self.make_select(1,persist.lifx_trigger_toggle)+'</p><p><b>Trigger for full brightness</b><br>'+self.make_select(2,persist.lifx_trigger_brightness)+'</p><input type="hidden" name="group"><p></p><button class="button bgrn" name="setgrp" value="'+self.source+'">Save</button></form></fieldset>'
       # The following line is modified by ./build.sh using the content of the file config.js
-      + '<script id="q">((c=5,wt=125,g='+json.dump(persist.lifx_group)+'??[],i='+json.dump(self.discovery)+',$=i=>document.querySelector(i),$$=i=>[...document.querySelectorAll(i)],e=s=>s.replace(/[&<>\'"]/g,c=>`&#x${c.charCodeAt().toString(16)};`),s=(t,c)=>$(t).onchange=()=>$(c).style.display=$(t).value=="custom"?"":"none",l=j=>{Object.entries(j).forEach(([id,[ip,label]])=>$("#"+id)?$(`label[for="${id}"]`).textContent=label:$`#t`.append(Object.assign(document.createElement`tr`,{innerHTML:`<td><input id="${e(id)}" name="${e(id)}" ${g.includes(id) ? "checked" : ""} type="checkbox"></td><td><label for="${e(id)}">${e(label)}</label></td><td>${e(ip)}</label></td>`})));$$`tbody label`.sort((l1,l2)=>l1.textContent.localeCompare(l2.textContent)).forEach(l=>$`#t`.append(l.parentElement.parentElement))},f=_=>setTimeout(async _=>{if(!c--)return;f();l(await(await fetch("?j=1")).json())},wt*=2))=>{$`#f`.onsubmit=_=>$`#f`.group.value=$$`tbody [type="checkbox"]`.filter(i=>i.checked).map(i=>i.name).join();s("#t1","#c1");s("#t2","#c2");l(i);f()})()</script>')
+      + '<script id="q">((c=5,wt=125,g='+json.dump(persist.lifx_group)+'??[],i='+json.dump(self.discovery)+',$=i=>document.querySelector(i),$$=i=>[...document.querySelectorAll(i)],e=s=>s.replace(/[&<>\'"]/g,c=>`&#x${c.charCodeAt().toString(16)};`),s=(t,c)=>$(t).onchange=()=>$(c).style.display=$(t).value=="custom"?"":"none",w=_=>$$`tbody [type="checkbox"]`.filter(i=>i.checked).map(i=>i.name).join(),b=i=>$("#"+i).onclick=_=>fetch(`?${i}=1&ids=${w()}&src=${$`[name="setgrp"]`.value}`),l=j=>{Object.entries(j).forEach(([id,[ip,label]])=>$("#"+id)?$(`label[for="${id}"]`).textContent=label:$`#t`.append(Object.assign(document.createElement`tr`,{innerHTML:`<td><input id="${e(id)}" name="${e(id)}" ${g.includes(id)?"checked":""} type="checkbox"></td><td><label for="${e(id)}">${e(label)}</label></td><td>${e(ip)}</label></td>`})));$$`tbody label`.sort((l1,l2)=>l1.textContent.localeCompare(l2.textContent)).forEach(l=>$`#t`.append(l.parentElement.parentElement))},f=_=>setTimeout(async _=>{if(!c--)return;f();l(await(await fetch("?j=1")).json())},wt*=2))=>{$`#f`.onsubmit=_=>$`#f`.group.value=w();s("#t1","#c1");s("#t2","#c2");b("tl");b("fb");l(i);f()})();</script>')
     webserver.content_button(webserver.BUTTON_CONFIGURATION)
     webserver.content_stop()
   end
@@ -156,7 +175,8 @@ class LifxDriver
   end
   def trigger_toggle_lights()
     self.group_action(/ ip, id -> self.lifx_toggle_power(ip, id, !self.toggled))
-    # we don't update self.toggled here. instead we wait for the next polling to confirm the change, update self.powers and therefore self.toggled
+    # we don't update self.toggled here. instead we query the bulbs to confirm the change, update self.powers and therefore self.toggled
+    self.query_light_bulbs()
   end
   def trigger_full_brightness()
     self.group_action(def (ip, id)
