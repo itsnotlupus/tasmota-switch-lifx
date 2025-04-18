@@ -13,6 +13,8 @@ class LifxDriver
     [ "Button1#Action=DOUBLE", "Button1#State=11" ]
   ]
 
+  # a flag to wait for things to be ready at startup
+  var ready
   # a UDP socket to talk to LIFX devices
   var u
   # a random number that identifies us to the devices for this session
@@ -27,9 +29,15 @@ class LifxDriver
   var tick
 
   def init()
-    # XXX disable the next two lines in prod
-    webserver.on('/lifx', / -> self.show_lifx_config(), webserver.HTTP_GET)
-    webserver.on('/lifx', / -> self.set_lifx_config(), webserver.HTTP_POST)
+    self.ready = false
+    self.tick = 0 
+  end
+  def initialization()
+    # called once we have a working network underneath us.
+    if tasmota.millis() > 10000
+      # if this is ran manually after startup, web_add_handler() won't get called for us.
+      self.web_add_handler()
+    end
 
     self.u = udp()
     self.u.begin("", 0)
@@ -37,10 +45,9 @@ class LifxDriver
     self.discovery = {} 
     self.toggled = false # initial state, will get updated by polling bulbs
     self.powers = {}
-    self.tick = 0 
 
     # This starts the LIFX integration if a configuration was previously saved
-    self.assign_triggers();
+    self.assign_triggers()
   end
   # Web UI handling
   def web_add_handler()
@@ -82,7 +89,7 @@ class LifxDriver
     webserver.content_stop()
   end
   def set_lifx_config()
-    var tiny_csrf_check = webserver.arg("setgrp");
+    var tiny_csrf_check = webserver.arg("setgrp")
     if tiny_csrf_check != self.source
       print("LifxDriver: Invalid POST /lifx request")
       return
@@ -185,6 +192,10 @@ class LifxDriver
     self.tick +=1
     if !tasmota.eth()['up'] && !tasmota.wifi()['up']
       return # not connected to an IP network yet.
+    end
+    if !self.ready
+      self.ready = true
+      self.initialization()
     end
     # 1. react to UDP payloads
     var packet = self.u.read()
