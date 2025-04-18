@@ -6,6 +6,13 @@ import json
 import persist
 
 class LifxDriver
+  static var TRIGGERS = [
+    # a set of plausible triggers for light power toggling
+    [ "Button1#Action=SINGLE", "Button1#State=10" ],
+    # a set of plausible triggers to force full brightness
+    [ "Button1#Action=DOUBLE", "Button1#State=11" ]
+  ]
+
   # a UDP socket to talk to LIFX devices
   var u
   # a random number that identifies us to the devices for this session
@@ -43,6 +50,21 @@ class LifxDriver
   def web_add_config_button()
     webserver.content_send('<p></p><form id="lifx" action="lifx" style="display: block;" method="get"><button name=""><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" style="fill: white;overflow: visible;" viewBox="0 -62 512 450"><path d="M353 346c-54-52-138-52-192 0q0 1 0 0-12-10-20-19A156 156 0 0 1 260 68q36 0 69 17c89 47 110 165 44 241q-6 8-19 20h-1Zm-173-55c54-27 117-24 168 8a1 1-54 0 0 1 0c49-60 29-151-41-184-47-22-104-11-139 27-40 45-41 110-5 157h1l15-8Z"></path><path d="M306 394a70 70 0 0 0-88-8l-10 8h-1l-21-21a1 1 0 0 1 0-1c41-39 102-39 142 0v1l-21 21a1 1 0 0 1-1 0Zm-24 25-25 24a1 1 0 0 1-1 1l-24-25v-1c14-13 36-14 50 0v1Z"></path></svg>Configure LIFX</button></form>')
   end
+  def make_select(idx, value)
+    var presets = self.TRIGGERS[idx-1]
+    var s = '<select id="t'+str(idx)+'" name="t'+str(idx)+'"><option value=""'+(value?'':' selected')+'>--No Trigger--</option>'
+    var found = false
+    for trigger: presets
+      var attr=''
+      if trigger == value
+        found = true
+        attr = " selected"
+      end
+      s += '<option'+attr+'>'+trigger
+    end
+    var custom = value && !found
+    return s + '<option value="custom"'+(custom?' selected':'')+'>Custom Trigger Below:</select><p id="c'+str(idx)+'" style="display:none"><input name="cc'+str(idx)+'" placeholder="Device#State" value="'+webserver.html_escape(value)+'"></p>'
+  end
   def show_lifx_config()
     if webserver.has_arg("j") # used by config page to refresh set of lights found
       self.lifx_discovery()
@@ -53,7 +75,7 @@ class LifxDriver
     # emit HTML
     webserver.content_start("LIFX Configuration Page")
     webserver.content_send_style()
-    webserver.content_send('<fieldset><legend><b> LIFX Configuration </b></legend><p style="width:320px;"><div>See the <a href="https://github.com/itsnotlupus/tasmota-switch-lifx/wiki" target="_blank">documentation</a>.</div><p><b>Choose the lights to control</b></p><form id="f" method="post"><table style="width:100%"><tbody id=t></tbody></table><p></p><hr><p><b>Trigger to toggle the lights</b><br><select id="t1" name="t1"><option value="">--No Trigger--</option>'+'<option>Button1#Action=SINGLE'+'<option value="custom">Custom Trigger Below:</select><p id="c1" style="display:none"><input name="cc1" placeholder="Device#State"></p><p><b>Trigger for full brightness</b><br><select id="t2" name="t2"><option value="">--No Trigger--</option>'+'<option>Button1#Action=DOUBLE'+'<option value="custom">Custom Trigger Below:</select><p id="c2" style="display:none"><input name="cc2" placeholder="Device#State"></p><input type="hidden" name="group"><p></p><button class="button bgrn" name="setgrp" value="'+self.source+'">Save</button></form></fieldset>'
+    webserver.content_send('<fieldset><legend><b> LIFX Configuration </b></legend><p style="width:320px;"><div>See the <a href="https://github.com/itsnotlupus/tasmota-switch-lifx/wiki" target="_blank">documentation</a>.</div><p><b>Choose the lights to control</b></p><form id="f" method="post"><table style="width:100%"><tbody id=t></tbody></table><p></p><hr><p><b>Trigger to toggle the lights</b><br>'+self.make_select(1,persist.lifx_trigger_toggle)+'</p><p><b>Trigger for full brightness</b><br>'+self.make_select(2,persist.lifx_trigger_brightness)+'</p><input type="hidden" name="group"><p></p><button class="button bgrn" name="setgrp" value="'+self.source+'">Save</button></form></fieldset>'
       # The following line is modified by ./build.sh using the content of the file config.js
       + '<script id="q">((c=5,wt=125,g='+json.dump(persist.lifx_group)+'??[],i='+json.dump(self.discovery)+',$=i=>document.querySelector(i),$$=i=>[...document.querySelectorAll(i)],e=s=>s.replace(/[&<>\'"]/g,c=>`&#x${c.charCodeAt().toString(16)};`),s=(t,c)=>$(t).onchange=()=>$(c).style.display=$(t).value=="custom"?"":"none",l=j=>{Object.entries(j).forEach(([id,[ip,label]])=>$("#"+id)?$(`label[for="${id}"]`).textContent=label:$`#t`.append(Object.assign(document.createElement`tr`,{innerHTML:`<td><input id="${e(id)}" name="${e(id)}" ${g.includes(id) ? "checked" : ""} type="checkbox"></td><td><label for="${e(id)}">${e(label)}</label></td><td>${e(ip)}</label></td>`})));$$`tbody label`.sort((l1,l2)=>l1.textContent.localeCompare(l2.textContent)).forEach(l=>$`#t`.append(l.parentElement.parentElement))},f=_=>setTimeout(async _=>{if(!c--)return;f();l(await(await fetch("?j=1")).json())},wt*=2))=>{$`#f`.onsubmit=_=>$`#f`.group.value=$$`tbody [type="checkbox"]`.filter(i=>i.checked).map(i=>i.name).join();s("#t1","#c1");s("#t2","#c2");l(i);f()})()</script>')
     webserver.content_button(webserver.BUTTON_CONFIGURATION)
@@ -90,8 +112,12 @@ class LifxDriver
     tasmota.remove_rule(persist.lifx_trigger_toggle, "lifx_toggle")
     tasmota.remove_rule(persist.lifx_trigger_brightness, "lifx_brightness")
     # update triggers if given.
-    if trigger_toggle persist.lifx_trigger_toggle = trigger_toggle end
-    if trogger_brightness persist.lifx_trigger_brightness = trigger_brightness end
+    if trigger_toggle != nil
+      persist.lifx_trigger_toggle = trigger_toggle
+    end
+    if trigger_brightness != nil
+      persist.lifx_trigger_brightness = trigger_brightness
+    end
     # don't set rules with empty triggers, they act as full wildcards
     if persist.lifx_trigger_toggle
       tasmota.add_rule(persist.lifx_trigger_toggle, / -> self.trigger_toggle_lights(), "lifx_toggle")
