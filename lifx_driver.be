@@ -63,7 +63,7 @@ class LifxDriver
       s += '<option'+attr+'>'+trigger
     end
     var custom = value && !found
-    return s + '<option value="custom"'+(custom?' selected':'')+'>Custom Trigger Below:</select><p id="c'+str(idx)+'" style="display:none"><input name="cc'+str(idx)+'" placeholder="Device#State" value="'+webserver.html_escape(value)+'"></p>'
+    return s + '<option value="custom"'+(custom?' selected':'')+'>Custom Trigger Below:</select><p id="c'+str(idx)+'" style="display:none"><input name="cc'+str(idx)+'" placeholder="Device#State" value="'+(value==nil?'':webserver.html_escape(value))+'"></p>'
   end
   def show_lifx_config()
     if webserver.has_arg("j") # used by config page to refresh set of lights found
