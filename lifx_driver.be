@@ -8,9 +8,9 @@ import persist
 class LifxDriver
   static var TRIGGERS = [
     # a set of plausible triggers for light power toggling
-    [ "Button1#Action=SINGLE", "Button1#State=10" ],
+    [ "Button1#Action=SINGLE", "Button1#State=10", "Switch1#state=2" ],
     # a set of plausible triggers to force full brightness
-    [ "Button1#Action=DOUBLE", "Button1#State=11" ]
+    [ "Button1#Action=DOUBLE", "Button1#State=11", "Switch1#state=3" ]
   ]
 
   # a flag to wait for things to be ready at startup
@@ -31,9 +31,13 @@ class LifxDriver
   def init()
     self.ready = false
     self.tick = 0 
+    self.source = uuid.uuid4()[0..7] 
+    self.discovery = {} 
+    self.toggled = false # initial state, will get updated by polling bulbs
+    self.powers = {}
+    # wait for every_second() to call startup() once network is up.
   end
-  def initialization()
-    # called once we have a working network underneath us.
+  def startup()
     if tasmota.millis() > 10000
       # if this is ran manually after startup, web_add_handler() won't get called for us.
       self.web_add_handler()
@@ -41,13 +45,14 @@ class LifxDriver
 
     self.u = udp()
     self.u.begin("", 0)
-    self.source = uuid.uuid4()[0..7] 
-    self.discovery = {} 
-    self.toggled = false # initial state, will get updated by polling bulbs
-    self.powers = {}
 
     # This starts the LIFX integration if a configuration was previously saved
     self.assign_triggers()
+
+    self.log("Initialized")
+  end
+  def log(*args)
+    call(print, "Lifx:", args)
   end
   # Web UI handling
   def web_add_handler()
@@ -55,7 +60,7 @@ class LifxDriver
     webserver.on('/lifx', / -> self.set_lifx_config(), webserver.HTTP_POST)
   end
   def web_add_config_button()
-    webserver.content_send('<p></p><form id="lifx" action="lifx" style="display: block;" method="get"><button name=""><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" style="fill: white;overflow: visible;" viewBox="0 -62 512 450"><path d="M353 346c-54-52-138-52-192 0q0 1 0 0-12-10-20-19A156 156 0 0 1 260 68q36 0 69 17c89 47 110 165 44 241q-6 8-19 20h-1Zm-173-55c54-27 117-24 168 8a1 1-54 0 0 1 0c49-60 29-151-41-184-47-22-104-11-139 27-40 45-41 110-5 157h1l15-8Z"></path><path d="M306 394a70 70 0 0 0-88-8l-10 8h-1l-21-21a1 1 0 0 1 0-1c41-39 102-39 142 0v1l-21 21a1 1 0 0 1-1 0Zm-24 25-25 24a1 1 0 0 1-1 1l-24-25v-1c14-13 36-14 50 0v1Z"></path></svg>Configure LIFX</button></form>')
+    webserver.content_send('<p></p><form id="lifx" action="lifx" style="display: block;" method="get"><button name=""><svg xmlns="http://www.w3.org/2000/svg" width="24" fill="white" viewBox="0 0 24 24" style="vertical-align: text-bottom;"><path d="M10.04.06a9.98 9.78 0 0 0-7.1 2.89 10.1 9.9 0 0 0-2.94 7 10.1 9.88 0 0 0 2.94 7l.87.83.04-.04a8.76 8.58 0 0 1 6.2-2.5 8.8 8.6 0 0 1 6.2 2.5l.05.04.85-.85a10.13 9.92 0 0 0 2.94-7c0-2.53-.98-5.06-2.94-6.99a10.08 9.87 0 0 0-7.1-2.88zm0 2.28a7.67 7.51 0 0 1 5.46 2.22 7.8 7.64 0 0 1 .5 10.22 10.98 10.75 0 0 0-11.94 0 7.86 7.7 0 0 1-1.75-4.83c0-1.94.76-3.9 2.27-5.4a7.64 7.48 0 0 1 5.46-2.21zm0 15.16a6.6 6.6 0 0 0-4.62 1.89l1.43 1.4a4.53 4.43 0 0 1 6.4 0l1.43-1.4a6.62 6.62 0 0 0-4.64-1.89zm0 4.16a2.27 2.22 0 0 0-1.63.67l1.63 1.61 1.63-1.6a2.25 2.2 0 0 0-1.63-.68z"></path></svg> Configure LIFX</button></form>')
   end
   def make_select(idx, value)
     var presets = self.TRIGGERS[idx-1]
@@ -70,7 +75,7 @@ class LifxDriver
       s += '<option'+attr+'>'+trigger
     end
     var custom = value && !found
-    return s + '<option value="custom"'+(custom?' selected':'')+'>Custom Trigger Below:</select><p id="c'+str(idx)+'" style="display:none"><input name="cc'+str(idx)+'" placeholder="Device#State" value="'+(value==nil?'':webserver.html_escape(value))+'"></p>'
+    return s + '<option value="custom"'+(custom?' selected':'')+'>Custom Trigger Below:</select><p id="c'+str(idx)+'" style="display:'+(custom?'':'none')+'"><input name="cc'+str(idx)+'" placeholder="Device#State" value="'+(value==nil?'':webserver.html_escape(value))+'"></p>'
   end
   def show_lifx_config()
     if webserver.has_arg("j") # used by config page to refresh set of lights found
@@ -91,7 +96,7 @@ class LifxDriver
   def set_lifx_config()
     var tiny_csrf_check = webserver.arg("setgrp")
     if tiny_csrf_check != self.source
-      print("LifxDriver: Invalid POST /lifx request")
+      self.log("Invalid POST /lifx request")
       return
     end
     persist.lifx_group = string.split(webserver.arg("group"),',')
@@ -110,7 +115,7 @@ class LifxDriver
     self.powers = {}
     webserver.content_start("LIFX Configuration Page")
     webserver.content_send_style()
-    webserver.content_send('<div>Light Group Assigned.</div><div></div><div>Returning to LIFX Configuration page..</div><script>setTimeout(()=>location.replace("/lifx?"), 3000)</script>')
+    webserver.content_send('<div>Settings applied.</div><div></div><div>Returning to LIFX Configuration page..</div><script>setTimeout(()=>location.replace("/lifx?"), 3000)</script>')
     webserver.content_stop()
   end
   # Trigger handling
@@ -154,7 +159,14 @@ class LifxDriver
     # we don't update self.toggled here. instead we wait for the next polling to confirm the change, update self.powers and therefore self.toggled
   end
   def trigger_full_brightness()
-    self.group_action(/ ip, id -> self.lifx_set_brightness(ip, id, 0xffff))
+    self.group_action(def (ip, id)
+      # full brightness also turns the light on
+      self.lifx_set_brightness(ip, id, 0xffff)
+      self.lifx_toggle_power(ip, id, 0xffff)
+    end)
+  end
+  def query_light_bulbs()
+    self.group_action(/ ip, id -> self.lifx_query_power(ip, id))
   end
   def update_toggle(power)
     var value = power # shortcut. any light on means the whole group is considered on
@@ -172,22 +184,6 @@ class LifxDriver
       tasmota.cmd("LedPower "+(value?"On":"Off"), true) # XXX This behavior should be configurable
     end
   end
-  def query_light_bulbs()
-    var tried = false
-    for id: persist.lifx_group
-      if self.discovery.contains(id)
-        var ip = self.discovery[id][0]
-        self.lifx_query_power(ip, id)
-      else
-        if !tried
-          # we're missing information about one or more light in our group. trigger a discovery to fix it.
-          # this is the "normal" flow for lifx discovery to happen when the driver starts
-          self.lifx_discovery()
-          tried = true
-        end
-      end
-    end
-  end
   def every_second()
     self.tick +=1
     if !tasmota.eth()['up'] && !tasmota.wifi()['up']
@@ -195,14 +191,14 @@ class LifxDriver
     end
     if !self.ready
       self.ready = true
-      self.initialization()
+      self.startup()
     end
     # 1. react to UDP payloads
     var packet = self.u.read()
     while packet != nil
       # minimal packet validation
       if packet.size() < 36
-        print("LifxDriver: Unexpected UDP packet received", packet.tostring())
+        self.log("Unexpected UDP packet received", packet.tostring())
         continue
       end
       var cmd=packet.get(32,2)
@@ -268,10 +264,10 @@ class LifxDriver
   def lifx_query_color(ip, id)
     self.u.send(ip, 56700, bytes("24000014")+bytes(self.source)+bytes(id)+bytes("00000000000000000101000000000000000065000000"))
   end
+  # brightness is a uint16. 0x0000 = no brightness, 0xffff = full brightness, and anything in between.
   def lifx_set_brightness(ip, id, brightness)
-    # XXX This doesn't force the power on, which I think goes against the spirit of the double tap.
     var packet = bytes("3d000014")+bytes(self.source)+bytes(id)+bytes("00000000000000000202000000000000000077000000000000000000ffff0000000000000000803f00800000000100")
-    # packet.set(84, brightness, 2) # brightness ranges 0 to 65535. I could pass floats around and convert but.. why.
+    packet.set(42, brightness, 2)
     self.u.send(ip, 56700, packet)
   end
 end
