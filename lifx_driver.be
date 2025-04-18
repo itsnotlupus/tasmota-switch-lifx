@@ -126,14 +126,14 @@ class LifxDriver
       tasmota.add_rule(persist.lifx_trigger_brightness, / -> self.trigger_full_brightness(), "lifx_brightness")
     end
   end
-  def trigger_toggle_lights()
+  def group_action(action) 
     var tried = false
     for id: persist.lifx_group
       if self.discovery.contains(id)
         var ip = self.discovery[id][0]
-        self.lifx_toggle_power(ip, id, !self.toggled)
+        action(ip, id)
       else
-        # we're missing an IP control to control one or more LIFX devices
+        # we're missing an IP address to control one or more LIFX devices
         # it's too late for this interaction, but try to fix it for the next one
         if !tried
           self.lifx_discovery()
@@ -141,11 +141,13 @@ class LifxDriver
         end
       end
     end
+  end
+  def trigger_toggle_lights()
+    self.group_action(/ ip, id -> self.lifx_toggle_power(ip, id, !self.toggled))
     # we don't update self.toggled here. instead we wait for the next polling to confirm the change, update self.powers and therefore self.toggled
   end
   def trigger_full_brightness()
-    # XXX implement me. slightly obnoxious since the LIFX LAN API seems to require parsing and re-setting several light fields (color, warmth, etc) to change the brightness.
-    print("LifxDriver: trigger_full_brightness is not implemented.")
+    self.group_action(/ ip, id -> self.lifx_set_brightness(ip, id, 0xffff))
   end
   def update_toggle(power)
     var value = power # shortcut. any light on means the whole group is considered on
@@ -192,7 +194,7 @@ class LifxDriver
         print("LifxDriver: Unexpected UDP packet received", packet.tostring())
         continue
       end
-      var cmd=packet[32]
+      var cmd=packet.get(32,2)
       var id = packet[8..13].tohex()
       if cmd == 3 # StateService
         var tmp_label = self.discovery.contains(id) ? self.discovery[id][1] : "LIFX Device"
@@ -200,10 +202,10 @@ class LifxDriver
         # Ask for a human-friendly label to show the user
         self.lifx_query_label(self.u.remote_ip, id)
       elif cmd == 25 # StateLabel 
-        var label = string.split(packet[36..-1].asstring(),"\000", 0)[0] # truncate string at its first null..
+        var label = string.split(packet[36..68].asstring(),"\000", 0)[0] # truncate string at its first null..
         self.discovery[id] = [self.u.remote_ip, label, self.tick]
       elif cmd == 22 # StatePower
-        var power = packet.get(36,-2) != 0
+        var power = packet.get(36,2) != 0
         self.powers[id] = power
         self.update_toggle(power)
       end
@@ -251,6 +253,15 @@ class LifxDriver
   end
   def lifx_toggle_power(ip, id, on)
     self.u.send(ip, 56700, bytes("26000014")+bytes(self.source)+bytes(id)+bytes("00000000000000000201000000000000000015000000")+bytes(on ? "ffff" : "0000"))
+  end
+  def lifx_query_color(ip, id)
+    self.u.send(ip, 56700, bytes("24000014")+bytes(self.source)+bytes(id)+bytes("00000000000000000101000000000000000065000000"))
+  end
+  def lifx_set_brightness(ip, id, brightness)
+    # XXX This doesn't force the power on, which I think goes against the spirit of the double tap.
+    var packet = bytes("3d000014")+bytes(self.source)+bytes(id)+bytes("00000000000000000202000000000000000077000000000000000000ffff0000000000000000803f00800000000100")
+    # packet.set(84, brightness, 2) # brightness ranges 0 to 65535. I could pass floats around and convert but.. why.
+    self.u.send(ip, 56700, packet)
   end
 end
 
