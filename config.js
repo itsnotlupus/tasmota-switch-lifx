@@ -49,9 +49,11 @@
     // hook events on test buttons
     b("tl");
     b("fb");
+    // hook options checkboxes: make the 3d checkbox conditional on the 2d one being set
+    $("#o2").onchange = (e,w=$("#o3")) => (w.disabled=!$("#o2").checked)&&(w.checked=false);
     // process the first discovery json payload embedded in the script
     l(i); 
     // schedule fetching updated discovery feeds
-    f() 
+    f()
   }
 )()
